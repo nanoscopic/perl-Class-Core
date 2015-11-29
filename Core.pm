@@ -1,6 +1,6 @@
 # Class::Core Wrapper System
-# Version 0.02
-# Copyright (C) 2012 David Helkowski
+# Version 0.03
+# Copyright (C) 2013 David Helkowski
 
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,58 +14,60 @@
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 
-package XML::Bare;
-
-use Carp;
-use strict;
-use vars qw( @ISA @EXPORT @EXPORT_OK $VERSION );
-require Exporter;
-@ISA = qw(Exporter);
-
-$VERSION = "0.02";
-
-use vars qw($VERSION);
-
-@EXPORT = qw( );
-@EXPORT_OK = qw( );
-
 =head1 NAME
 
 Class::Core - Class wrapper system providing parameter typing, logging, and class auto-instanitation
 
 =head1 VERSION
 
-0.02
+0.03
 
 =cut
 
+# The container that is wrapped around the object
 package Class::Core::VIRT;
 use strict;
+use Carp;
 #use Data::Dumper;
 use XML::Bare qw/xval forcearray/;
+use Data::Dumper;
 our $AUTOLOAD;
+
+sub DESTROY {} # If this is not defined, AUTOLOAD gets called for it and creates problems ( on Win32 at any rate )
 sub AUTOLOAD {
-    my $ob = shift;
+    my $virt = shift;
     my $tocall = $AUTOLOAD;
     $tocall =~ s/^Class::Core::VIRT:://;
-    return if( $tocall eq 'DESTROY' ); # Don't bother calling a virtual destroy
-    my $ref = $ob->{ $tocall }; # grab the function reference
-    my $spec = $ob->{'_spec'};
+    
+    my $obj = $virt->{'obj'};
+    my $map = $obj->{'_map'};
+    my $ref = $map->{ $tocall }; # grab the function reference
+    my $cls = $obj->{'_class'};
+    if( !$ref ) {
+        #print Dumper( $virt );
+        confess "No function $tocall in $cls\n";
+    }
+    my $spec = $obj->{'_spec'};
+    if( ( scalar @_ ) % 2 ) {
+        confess "Non even list - $cls->$tocall\n";
+    }
     my %parms = @_;
+    my $allerr = '';
+    my $fspec;
     if( $spec ) {
-        $spec = $spec->{'funcs'}{ $tocall };
-        if( $spec ) {
-            if( $spec->{'sig'} ) {
+        $fspec = $spec->{'funcs'}{ $tocall };
+        if( $fspec ) { # if the function has specs; make sure one passes
+            if( $fspec->{'sig'} ) {
                 # Additionally check global specs if they are set
-                if( $spec->{'in'} || $spec->{'out'} || $spec->{'ret'} ) {
-                    my $err = _checkspec( $ob, $spec, \%parms );
-                    die $err if( $err );
+                if( $fspec->{'in'} || $fspec->{'out'} || $fspec->{'ret'} ) {
+                    my $err = _checkspec( $obj, $fspec, \%parms );
+                    $allerr .= $err if( $err );
                 }
-                my $sigs = forcearray( $spec->{'sig'} );
-                my $allerr = '';
+                
+                my $sigs = forcearray( $fspec->{'sig'} );
                 my $ok = 0;
                 for my $sig ( @$sigs ) {
-                    my $err = _checkspec( $ob, $sig, \%parms );
+                    my $err = _checkspec( $virt, $sig, \%parms );
                     if( $err ) {
                         $allerr .= "$err\n";
                     }
@@ -82,20 +84,30 @@ sub AUTOLOAD {
                         last;
                     }
                 }
-                if( !$ok ) {
-                    die $allerr;
-                }
             }
             else {
-                my $err = _checkspec( $ob, $spec, \%parms );
-                die $err if( $err );
+                $allerr .= _checkspec( $obj, $fspec, \%parms );
             }
         }
     }
     
-    my $inner = { parms => \%parms, _spec => $spec };
+    die $allerr if( $allerr );
+        
+    my $inner = { parms => \%parms, _funcspec => $spec, virt => $virt };#_glob => $obj->{'_glob'}, 
     bless $inner, "Class::Core::INNER";
-    my $rval = $inner->{'ret'} = &$ref( $inner, $ob );
+    my $callback = $obj->{'_callback'};
+    
+    my $okay = 1;
+    if( $callback ) {
+        # inner contains call parameters
+        # virt is the virtual wrapper around the object
+        $okay = &$callback( $inner, $virt, $tocall, \%parms );
+    }
+    if( !$okay ) {
+        die "Call to $tocall in $cls failed due to callback\n";
+    }
+    
+    my $rval = $inner->{'ret'} = &$ref( $inner, $virt ); # call the function
     if( $spec ) {
         my $retspec = $spec->{'ret'};
         if( $retspec && %$retspec ) {
@@ -107,11 +119,17 @@ sub AUTOLOAD {
     return $inner;
 }
 
+sub _hasfunc {
+    my ( $ob, $tocall ) = @_;
+    my $spec = $ob->{'_spec'};
+    return $spec->{'funcs'}{ $tocall };
+}
+
 sub _checkspec {
-    my ( $ob, $spec, $parms ) = @_;
+    my ( $obj, $spec, $parms ) = @_;
     my $state = $spec->{'state'};
-    if( $state && $state ne $ob->{'_state'} ) {
-        _tostate( $ob, $state );
+    if( $state && $state ne $obj->{'_state'} ) {
+        _tostate( $obj, $state );
     }
     my $ins = $spec->{'in'};
     for my $key ( keys %$ins ) {
@@ -125,10 +143,10 @@ sub _checkspec {
 }
 
 sub _tostate {
-    my ( $ob, $dest ) = @_;
+    my ( $obj, $dest ) = @_;
     print "Attempt to change to state $dest\n";
-    $ob->{'init_'.$dest}->();
-    $ob->{'_state'} = $dest;
+    $obj->{'_map'}{'init_'.$dest}->();
+    $obj->{'_state'} = $dest;
 }
 
 sub _checkval {
@@ -243,18 +261,51 @@ sub _checknum {
     }
     return 0;
 }
-    
+
+sub _duplicate {
+    my $virt = shift;
+    my $obj = $virt->{'obj'};
+    #print "Duplicating ".$obj->{'_class'}."\n";
+    my $newvirt = { obj => $obj, src => $virt, @_ };
+    return bless $newvirt, 'Class::Core::VIRT';
+}
+
+# Parameter input and output container
 package Class::Core::INNER;
 use strict;
 #use Data::Dumper;
+
+sub getmod {
+    my ( $inner, $name ) = @_;
+    my $app = $inner->{'virt'}{'obj'}{'_app'};
+    return $app->getmod( mod => $name );
+}
 sub get {
-    my ( $self, $name ) = @_;
-    return $self->{'parms'}{ $name }; 
+    my ( $inner, $name ) = @_;
+    return $inner->{'parms'}{ $name }; 
+}
+sub set {
+    my ( $inner, $name, $val ) = @_;
+    $inner->{'res'}{ $name } = $val;
+}
+sub getres {
+    my ( $inner, $name ) = @_;
+    return $inner->{'res'}{ $name } || undef; 
+}
+
+# get an array of items
+sub getarr {
+    my ( $inner ) = shift;
+    my @ret;
+    for my $key ( @_ ) {
+        push( @ret, $inner->{'parms'}{ $key } );
+    }
+    return @ret;
 }
 sub add {
-    my ( $self, $name, $val ) = @_;
+    my ( $inner, $name, $val ) = @_;
     
-    my $spec = $self->{'_spec'};
+    my $spec = $inner->{'_funcspec'};
     my $outs = $spec->{'out'};
     #print Dumper( $self );
     my $outspec = $outs->{ $name };
@@ -264,19 +315,44 @@ sub add {
        my $err = Class::Core::VIRT::_checkval( $outspec, $type, $val );
        die "While checking $name - $err" if( $err );
     }
-    $self->{'parms'}{$name} = $val;
+    $inner->{'parms'}{$name} = $val;
+}
+#use Data::Dumper;
+sub create {
+    my $inner = shift;
+    my $virt = $inner->{'virt'};
+    my $glob = $virt->{'obj'}{'_glob'};
+    #print Dumper( $virt );
+    my $ref = $glob->{'create'}; # glob are globals for the application
+    return if( !$ref );
+    &$ref( $virt, $glob, @_ );
 }
 
 package Class::Core;
 use strict;
-#use Data::Dumper;
+use Data::Dumper;
 use XML::Bare qw/xval forcearray/;
-use vars qw/@EXPORT_OK @EXPORT @ISA/;
+use vars qw/@EXPORT_OK @EXPORT @ISA %EXPORT_TAGS $VERSION/;
 require Exporter;
 @ISA = qw(Exporter);
-@EXPORT = qw/wrap_class/;
-@EXPORT_OK = qw/wrap_class/;
-my $core = { classes => {} };
+@EXPORT = qw//;
+@EXPORT_OK = qw/new/;
+%EXPORT_TAGS = ( all => [ qw/new/ ] );
+$VERSION = '0.03';
+
+#my $core = { classes => {} };
+
+#sub new { return wrap_class( @_ ); }
+
+#sub import {
+#    my @info = caller;
+    
+    #print Dumper( \@info );
+        
+#    Class::Core->export_to_level( 1, @_ );
+    #return 'wrap_class';
+#}
+
 sub read_spec {
     my ( $func ) = @_;
     my ( %in, %out, %ret );
@@ -314,22 +390,30 @@ sub read_spec {
     
     return $func_spec;
 }
-sub wrap_class {
-    my $class = shift;
+sub create_object {
+    my ( $class, $objin ) = @_;
     no strict 'refs';
     
-    my %hash = ( _class => $class, _state => '_loaded', _core => $core );
-    my $classes = $core->{'classes'};
-    $classes->{ $class } = \%hash;
+    my %obj = ( _class => $class, _state => '_loaded', _map => {}, %$objin );
+    my $glob = $obj{'_glob'};
+    
+    my $classes = $glob->{'classes'};
     
     # Read in the specification setup for the passed class
-    my $spectext = ${"$class\::spec"};
+    my $spectext = ${"$class\::spec"} || 'file';
     if( $spectext ) {
-        my ( $ob, $xml ) = new XML::Bare( text => $spectext );
-        #print $ob->xml( $xml );
+        my ( $ob, $xml );
+        if( $spectext eq 'file' ) {
+            my $file = $class;
+            $file =~ s|::|/|g;
+            ( $ob, $xml ) = new XML::Bare( file => $file );
+        }
+        else {
+            ( $ob, $xml ) = new XML::Bare( text => $spectext );
+        }
         my $func_specs = {};
         my %spec = ( funcs => $func_specs );
-        $hash{'_spec'} = \%spec;
+        $obj{'_spec'} = \%spec;
         my $funcs = forcearray( $xml->{'func'} );
         for my $func ( @$funcs ) {
             my $name = xval $func->{'name'};
@@ -346,21 +430,54 @@ sub wrap_class {
             else {
                 $func_spec = read_spec( $func );
             }
-            #print Dumper( $func_spec );
             $func_specs->{ $name } = $func_spec;
         }
     }
-    #print Dumper( \%hash );
     
     # Create duplicates of all functions in the source class
     my $ref = \%{"$class\::"};
     
     for my $key ( keys %$ref ) {
+        next if( $key =~ m/^(new|import|DESTROY|BEGIN)$/ );
+        #print "  $key\n";
         my $func_ref = \&{"$class\::$key"};
         my $fname = $key;
         $key =~ s/^$class\:://;
-        $hash{ $fname } = $func_ref;
+        $obj{'_map'}{ $fname } = $func_ref;
     }
+    
+    return \%obj;
+}
+my %obj_store;
+sub new {
+    my $class = shift;
+    no strict 'refs';
+    
+    my %hashin = ( @_ );
+    my $objin = $hashin{'obj'} || {};
+    #if( $hashin{'core'} ) {
+    #    $objin->{'_glob'} = $hashin{'core'}{'_glob'};
+    #    undef $hashin{'core'};
+    #}
+    #else {
+        $objin->{'_glob'} ||= { classes => {}, create => 0 };
+    #}
+    my $obj;
+    if( $obj_store{ $class } ) {
+        #print "Creating a new $class from store\n";
+        $obj = $obj_store{ $class };
+    }
+    else {
+        $obj = $obj_store{ $class } = create_object( $class, $objin );
+    }
+
+    my $glob = $obj->{'_glob'};
+    
+    my %hash = ( %hashin, obj => $obj );
+    
+    my $classes = $glob->{'classes'};
+    $classes->{ $class } = \%hash;
+    # instance... = \%hash
     
     # Turn the hash we made into an object that is a virtual wrapper
     my $hashref = \%hash;
@@ -374,19 +491,17 @@ __END__
 
 =head1 SYNOPSIS
 
-TestMod.pm
+TestMod.pm.xml
 
-    package TestMod;
-    use Class::Core;
-    
-    $spec = <<DONE;
     <func name='test'>
         <in name='input' type='number'/>
         <ret type='bool'/>
     </func>
-    DONE
 
-    sub new { return wrap_class( 'TestMod' ); }
+TestMod.pm
+
+    package TestMod;
+    use Class::Core qw/:all/;
     
     sub test {
         my ( $core, $self ) = @_;
@@ -533,7 +648,7 @@ parameters are validated.
 
 =head1 LICENSE
 
-  Copyright (C) 2012 David Helkowski
+  Copyright (C) 2013 David Helkowski
   
   This program is free software; you can redistribute it and/or
   modify it under the terms of the GNU General Public License as

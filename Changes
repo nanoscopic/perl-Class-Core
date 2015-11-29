@@ -4,3 +4,17 @@ Class::Core Changelog
   - First release
 0.02 ( 2-11-13 )
   - Remove unacceptable reference to employer. ( had thought there was need to mention to due some changes being contributed on work time, but have been told it is unacceptable; from here on out project is solely a personal project and core copyright notice is changing )
+0.03
+  - Remove leftover junk from definitions about XML::Bare from the top of Core.pm
+  - Detect and die when functions are called without properly using named parameters
+  - Add the ability to have a callback for any function call on a class ( docs TODO )
+  - Add a func _hasfunc to easily determine if a class has a function ( docs TODO )
+  - Moved function pointers into a _map array to prevent function name collisions
+  - Added a _duplicate function for objects to create clones of objects ( docs TODO )
+  - Added some basic functions to provide tie in to App::Core such as getmod ( docs TODO )
+  - Added the following extra functions to the INNER class: set, getres, getarr ( docs TODO )
+  - Added a 'create' function to allow Class::Core to be extended to allow for object instances ( docs TODO )
+  - Specified version # in code now, since there is a dependency from App::Core
+  - Default now to reading specs from an xml file in same directory as modules ( docs TODO )
+  - Export 'new' function directly, rather than running through a pointless stub
+  - Update copyright notice to current year
