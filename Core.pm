@@ -1,6 +1,6 @@
 # Class::Core Wrapper System
-# Version 0.01
-# Copyright (C) 2012 David Helkowski & T.Rowe Price
+# Version 0.02
+# Copyright (C) 2012 David Helkowski
 
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -22,7 +22,7 @@ use vars qw( @ISA @EXPORT @EXPORT_OK $VERSION );
 require Exporter;
 @ISA = qw(Exporter);
 
-$VERSION = "0.01";
+$VERSION = "0.02";
 
 use vars qw($VERSION);
 
@@ -35,7 +35,7 @@ Class::Core - Class wrapper system providing parameter typing, logging, and clas
 
 =head1 VERSION
 
-0.01
+0.02
 
 =cut
 
@@ -533,7 +533,7 @@ parameters are validated.
 
 =head1 LICENSE
 
-  Copyright (C) 2012 David Helkowski & T.Trowe Price
+  Copyright (C) 2012 David Helkowski
   
   This program is free software; you can redistribute it and/or
   modify it under the terms of the GNU General Public License as
