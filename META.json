@@ -35,10 +35,10 @@
             "Carp" : 0,
             "Exporter" : 0,
             "Test::More" : 0,
-            "XML::Bare" : "0.45"
+            "XML::Bare" : "0.48"
          }
       }
    },
    "release_status" : "stable",
-   "version" : "0.03"
+   "version" : "0.04"
 }
